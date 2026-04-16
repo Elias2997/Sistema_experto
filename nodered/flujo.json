@@ -1,0 +1,233 @@
+[
+  {
+    "id": "medicoFlowTab",
+    "type": "tab",
+    "label": "Sistema Experto Medico IA",
+    "disabled": false,
+    "info": "Flujo para recibir sintomas, correlacionar deteccion visual con TensorFlow y consultar el backend medico."
+  },
+  {
+    "id": "httpInVision",
+    "type": "http in",
+    "z": "medicoFlowTab",
+    "name": "POST /vision-medica/analizar",
+    "url": "/vision-medica/analizar",
+    "method": "post",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 180,
+    "y": 160,
+    "wires": [
+      [
+        "preparePayload"
+      ]
+    ]
+  },
+  {
+    "id": "preparePayload",
+    "type": "function",
+    "z": "medicoFlowTab",
+    "name": "Preparar imagen y caso",
+    "func": "const payload = (msg.payload && typeof msg.payload === \"object\") ? msg.payload : {};\nmsg.originalPayload = payload;\nmsg.medicalRequest = {\n  sintomas: Array.isArray(payload.sintomas) ? payload.sintomas : [],\n  tipoEnfermedad: payload.tipoEnfermedad || \"general\",\n  grupoEdad: payload.grupoEdad || \"adulto\",\n  sexo: payload.sexo || \"otro\",\n  nivelUrgencia: payload.nivelUrgencia || \"media\",\n  contextoClinico: payload.contextoClinico || \"consulta general\"\n};\nmsg.simulatedMedicalObjects = Array.isArray(payload.objetosSimulados)\n  ? payload.objetosSimulados.map((item) => String(item).toLowerCase())\n  : [];\nif (payload.imageBase64) {\n  const base64 = String(payload.imageBase64).replace(/^data:image\\/\\w+;base64,/, \"\");\n  msg.payload = Buffer.from(base64, \"base64\");\n  msg.hasImage = msg.payload.length > 0;\n} else {\n  msg.payload = Buffer.alloc(0);\n  msg.hasImage = false;\n}\nreturn msg;",
+    "outputs": 1,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 430,
+    "y": 160,
+    "wires": [
+      [
+        "hasImageSwitch"
+      ]
+    ]
+  },
+  {
+    "id": "hasImageSwitch",
+    "type": "switch",
+    "z": "medicoFlowTab",
+    "name": "Hay imagen?",
+    "property": "hasImage",
+    "propertyType": "msg",
+    "rules": [
+      {
+        "t": "true"
+      },
+      {
+        "t": "else"
+      }
+    ],
+    "checkall": "true",
+    "repair": false,
+    "outputs": 2,
+    "x": 650,
+    "y": 160,
+    "wires": [
+      [
+        "tensorflowCoco"
+      ],
+      [
+        "simulateObjects"
+      ]
+    ]
+  },
+  {
+    "id": "tensorflowCoco",
+    "type": "cocossd",
+    "z": "medicoFlowTab",
+    "name": "TensorFlow COCO-SSD",
+    "x": 870,
+    "y": 120,
+    "wires": [
+      [
+        "mapDetections"
+      ]
+    ]
+  },
+  {
+    "id": "mapDetections",
+    "type": "function",
+    "z": "medicoFlowTab",
+    "name": "Mapear objetos medicos",
+    "func": "const detections = Array.isArray(msg.payload)\n  ? msg.payload\n  : Array.isArray(msg.payload?.detections)\n    ? msg.payload.detections\n    : [];\nconst detected = new Set(msg.simulatedMedicalObjects || []);\nfor (const item of detections) {\n  const label = String(item.class || item.label || item.detectedClass || \"\").toLowerCase();\n  if (!label) {\n    continue;\n  }\n  // COCO-SSD no trae etiquetas medicas exactas; por eso se aplica una capa de correlacion.\n  if (label.includes(\"bottle\") || label.includes(\"cup\")) {\n    detected.add(\"pastillas\");\n  }\n  if (label.includes(\"remote\") || label.includes(\"cell phone\")) {\n    detected.add(\"glucometro\");\n  }\n  if (label.includes(\"toothbrush\") || label.includes(\"knife\")) {\n    detected.add(\"jeringa\");\n  }\n}\nmsg.objetosTensorflow = detections;\nmsg.objetosDetectados = Array.from(detected);\nreturn msg;",
+    "outputs": 1,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 1110,
+    "y": 120,
+    "wires": [
+      [
+        "buildBackendPayload"
+      ]
+    ]
+  },
+  {
+    "id": "simulateObjects",
+    "type": "function",
+    "z": "medicoFlowTab",
+    "name": "Simular objetos medicos",
+    "func": "const detected = new Set(msg.simulatedMedicalObjects || []);\nconst symptoms = Array.isArray(msg.medicalRequest?.sintomas)\n  ? msg.medicalRequest.sintomas.join(\" \").toLowerCase()\n  : \"\";\nif (msg.medicalRequest?.tipoEnfermedad === \"metabolica\" || symptoms.includes(\"sed excesiva\") || symptoms.includes(\"vision borrosa\")) {\n  detected.add(\"glucometro\");\n}\nif (msg.medicalRequest?.tipoEnfermedad === \"infecciosa\" || symptoms.includes(\"fiebre\")) {\n  detected.add(\"pastillas\");\n}\nmsg.objetosTensorflow = [];\nmsg.objetosDetectados = Array.from(detected);\nreturn msg;",
+    "outputs": 1,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 890,
+    "y": 220,
+    "wires": [
+      [
+        "buildBackendPayload"
+      ]
+    ]
+  },
+  {
+    "id": "buildBackendPayload",
+    "type": "function",
+    "z": "medicoFlowTab",
+    "name": "Construir payload backend",
+    "func": "msg.headers = { \"Content-Type\": \"application/json\" };\nmsg.payload = {\n  ...msg.medicalRequest,\n  objetosDetectados: msg.objetosDetectados || [],\n  fuenteVision: {\n    modo: msg.hasImage ? \"tensorflow+capa_simulada\" : \"simulacion\",\n    deteccionesBrutas: Array.isArray(msg.objetosTensorflow) ? msg.objetosTensorflow.length : 0\n  }\n};\nreturn msg;",
+    "outputs": 1,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 1110,
+    "y": 200,
+    "wires": [
+      [
+        "backendRequest"
+      ]
+    ]
+  },
+  {
+    "id": "backendRequest",
+    "type": "http request",
+    "z": "medicoFlowTab",
+    "name": "POST backend /diagnostico",
+    "method": "POST",
+    "ret": "obj",
+    "paytoqs": "ignore",
+    "url": "http://localhost:3000/diagnostico",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 1360,
+    "y": 200,
+    "wires": [
+      [
+        "shapeResponse"
+      ]
+    ]
+  },
+  {
+    "id": "shapeResponse",
+    "type": "function",
+    "z": "medicoFlowTab",
+    "name": "Relacionar deteccion y diagnostico",
+    "func": "msg.payload = {\n  ok: true,\n  correlacion: {\n    objetosDetectados: msg.objetosDetectados || [],\n    origenVision: msg.hasImage ? \"TensorFlow COCO-SSD + correlacion\" : \"Simulacion clinica\",\n    nota: \"COCO-SSD se complementa con una capa de reglas para representar jeringa, glucometro y pastillas.\"\n  },\n  diagnostico: msg.payload\n};\nreturn msg;",
+    "outputs": 1,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 1620,
+    "y": 200,
+    "wires": [
+      [
+        "httpResponse"
+      ]
+    ]
+  },
+  {
+    "id": "httpResponse",
+    "type": "http response",
+    "z": "medicoFlowTab",
+    "name": "Respuesta HTTP",
+    "statusCode": "",
+    "headers": {},
+    "x": 1840,
+    "y": 200,
+    "wires": []
+  },
+  {
+    "id": "catchErrors",
+    "type": "catch",
+    "z": "medicoFlowTab",
+    "name": "Errores del flujo",
+    "scope": null,
+    "uncaught": false,
+    "x": 210,
+    "y": 300,
+    "wires": [
+      [
+        "formatError"
+      ]
+    ]
+  },
+  {
+    "id": "formatError",
+    "type": "function",
+    "z": "medicoFlowTab",
+    "name": "Formatear error JSON",
+    "func": "msg.statusCode = 500;\nmsg.payload = {\n  ok: false,\n  error: {\n    code: \"NODE_RED_FLOW_ERROR\",\n    message: msg.error?.message || \"Ocurrio un error en el flujo medico de Node-RED.\"\n  }\n};\nreturn msg;",
+    "outputs": 1,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 450,
+    "y": 300,
+    "wires": [
+      [
+        "httpResponse"
+      ]
+    ]
+  }
+]
+
