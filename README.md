@@ -224,3 +224,12 @@ cd "c:\Users\Angel\Documents\curso node js\Sistema_experto"
 
 Si PowerShell  bloquea la ejecución por política
 powershell -ExecutionPolicy Bypass -File .\start.ps1
+
+#Integrantes: 
+
+Andrés E. Leiva, 
+Carlos A. Rivera, 
+Marco A. Palma, 
+Florisell Cruz, 
+Ángel J. Lagos, 
+Elías J. Caballero
